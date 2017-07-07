@@ -13,7 +13,6 @@ REBUILD_CMD=./node_modules/.bin/electron-rebuild -w runas
 npm-install:
 	cd ../lektor/admin/; npm install
 	npm install
-	$(REBUILD_CMD)
 
 run-only:
 	./bin/run
@@ -38,13 +37,11 @@ build/imagemagick/convert:
 	./bin/compile-imagemagick
 
 osx-bundle: build/imagemagick/convert icons build-wheels
-	cd ../lektor/admin; npm install
+	cd ../lektor/admin/; npm install
 	npm install
-	npm install --production
-	$(REBUILD_CMD)
 	cd static; ../node_modules/.bin/webpack
 	mkdir -p $(OSX_BUNDLE_BASE) && rm -rf $(OSX_BUNDLE)
-	cp -RH node_modules/electron-prebuilt/dist/Electron.app $(OSX_BUNDLE)
+	cp -RH node_modules/electron-prebuilt/dist/Electron.app $(OSX_BUNDLE) # TODO: change from using prebuilt to modern electron
 	mv $(OSX_BUNDLE)/Contents/Frameworks/{Electron,Lektor}\ Helper\ EH.app
 	mv $(OSX_BUNDLE)/Contents/Frameworks/Lektor\ Helper\ EH.app/Contents/MacOS/{Electron,Lektor}\ Helper\ EH
 	sed -i '' s/Electron/Lektor/ $(OSX_BUNDLE)/Contents/Frameworks/Lektor\ Helper\ EH.app/Contents/Info.plist
@@ -65,8 +62,8 @@ osx-bundle: build/imagemagick/convert icons build-wheels
 	cp build/imagemagick/convert $(OSX_BUNDLE_RES)/local/bin
 	cp resources/lektor-mac-proxy $(OSX_BUNDLE_RES)/local/bin/lektor-proxy
 	cp resources/lektor $(OSX_BUNDLE_RES)/lektor
-	rm $(OSX_BUNDLE_RES)/atom.icns
-	rm -rf $(OSX_BUNDLE_RES)/default_app
+	rm $(OSX_BUNDLE_RES)/atom.icns # prebuilt specific I think
+	rm -rf $(OSX_BUNDLE_RES)/default_app # prebuilt specific I think
 	# Manually copy over native modules we depend on
 	mkdir -p $(OSX_BUNDLE_RES)/app/node_modules
 	cp -R node_modules/runas $(OSX_BUNDLE_RES)/app/node_modules/runas

@@ -134,6 +134,21 @@ def browsefs():
             okay = True
     return jsonify(okay=okay)
 
+@bp.route('/openfs', methods=['POST'])
+def openfs():
+    alt = request.values.get('alt') or PRIMARY_ALT
+    record = g.admin_context.pad.get(request.values['path'], alt=alt)
+    okay = False
+    if record is not None:
+        if record.is_attachment:
+            fn = record.attachment_filename
+        else:
+            fn = record.source_filename
+        if os.path.exists(fn):
+            click.launch(fn)
+            okay = True
+    return jsonify(okay=okay)
+
 
 @bp.route('/matchurl')
 def match_url():

@@ -7,12 +7,13 @@ import shutil
 import subprocess
 import tempfile
 import threading
-from contextlib import contextmanager
 
+from contextlib import contextmanager
+from ftplib import Error as FTPError
 from werkzeug import urls
 
 from lektor._compat import (iteritems, iterkeys, range_type, string_types,
-    text_type, queue, StringIO)
+    text_type, queue, BytesIO, StringIO, PY2)
 from lektor.exception import LektorException
 from lektor.utils import locate_executable, portable_popen
 
@@ -65,7 +66,7 @@ def _write_ssh_key_file(temp_fn, credentials):
                 f.write('-----END %s PRIVATE KEY-----\n' % kt.upper())
             os.chmod(temp_fn, 0o600)
             return temp_fn
-
+    return None
 
 def _get_ssh_cmd(port=None, keyfile=None):
     ssh_args = []
@@ -99,7 +100,6 @@ def _temporary_folder(env):
 
 class PublishError(LektorException):
     """Raised by publishers if something goes wrong."""
-    pass
 
 
 class Command(object):
@@ -208,6 +208,15 @@ class RsyncPublisher(Publisher):
         target = []
         env = {}
 
+        options = target_url.decode_query()
+        exclude = options.getlist('exclude')
+        for file in exclude:
+            argline.extend(('--exclude', file))
+
+        delete = options.get('delete', False) in ('', 'on', 'yes', 'true', '1', None)
+        if delete:
+            argline.append('--delete-delay')
+
         keyfile = _write_ssh_key_file(os.path.join(
             tempdir, 'ssh-auth-key'), credentials)
 
@@ -273,10 +282,16 @@ class FtpConnection(object):
 
         try:
             credentials = {}
-            if self.username:
-                credentials["user"] = self.username.encode('utf-8')
-            if self.password:
-                credentials["passwd"] = self.password.encode('utf-8')
+            if PY2:
+                if self.username:
+                    credentials["user"] = self.username.encode('utf-8')
+                if self.password:
+                    credentials["passwd"] = self.password.encode('utf-8')
+            else:
+                if self.username:
+                    credentials["user"] = self.username
+                if self.password:
+                    credentials["passwd"] = self.password
             log.append(self.con.login(**credentials))
 
         except Exception as e:
@@ -307,20 +322,25 @@ class FtpConnection(object):
             self.mkdir(dirname)
         try:
             self.con.mkd(path)
-        except Exception as e:
+        except FTPError as e:
             msg = str(e)
             if msg[:4] != '550 ':
-                self.log_buffer.append(e)
+                self.log_buffer.append(str(e))
                 return
         self._known_folders.add(path)
 
     def append(self, filename, data):
         if not isinstance(filename, text_type):
             filename = filename.decode('utf-8')
-        input = StringIO(data)
+
+        if PY2:
+            input = StringIO(data)
+        else:
+            input = BytesIO(data.encode('utf-8'))
+
         try:
             self.con.storbinary('APPE ' + filename, input)
-        except Exception as e:
+        except FTPError as e:
             self.log_buffer.append(str(e))
             return False
         return True
@@ -330,22 +350,30 @@ class FtpConnection(object):
             filename = filename.decode('utf-8')
         getvalue = False
         if out is None:
-            out = StringIO()
+            if PY2:
+                out = StringIO()
+            else:
+                out = BytesIO()
             getvalue = True
         try:
             self.con.retrbinary('RETR ' + filename, out.write)
-        except Exception as e:
+        except FTPError as e:
             msg = str(e)
             if msg[:4] != '550 ':
                 self.log_buffer.append(e)
             return None
         if getvalue:
-            return out.getvalue()
+            if PY2:
+                return out.getvalue()
+            return out.getvalue().decode('utf-8')
         return out
 
     def upload_file(self, filename, src, mkdir=False):
         if isinstance(src, string_types):
-            src = StringIO(src)
+            if PY2:
+                src = StringIO(src)
+            else:
+                src = BytesIO(src.encode('utf-8'))
         if mkdir:
             directory = posixpath.dirname(filename)
             if directory:
@@ -355,7 +383,7 @@ class FtpConnection(object):
         try:
             self.con.storbinary('STOR ' + filename, src,
                                 blocksize=32768)
-        except Exception as e:
+        except FTPError as e:
             self.log_buffer.append(str(e))
             return False
         return True
@@ -363,7 +391,7 @@ class FtpConnection(object):
     def rename_file(self, src, dst):
         try:
             self.con.rename(src, dst)
-        except Exception as e:
+        except FTPError as e:
             self.log_buffer.append(str(e))
             try:
                 self.con.delete(dst)
@@ -420,7 +448,10 @@ class FtpPublisher(Publisher):
         for line in contents.splitlines():
             items = line.split('|')
             if len(items) == 2:
-                artifact_name = items[0].decode('utf-8')
+                if not isinstance(items[0], text_type):
+                    artifact_name = items[0].decode('utf-8')
+                else:
+                    artifact_name = items[0]
                 if artifact_name in rv:
                     duplicates.add(artifact_name)
                 rv[artifact_name] = items[1]
@@ -540,7 +571,7 @@ class GithubPagesPublisher(Publisher):
         rv = username
         if username and password:
             rv += ':' + password
-        return rv.encode('utf-8') if rv else None
+        return rv if rv else None
 
     def update_git_config(self, repo, url, branch, credentials=None):
         ssh_command = None

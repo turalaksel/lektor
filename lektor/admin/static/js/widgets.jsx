@@ -1,50 +1,49 @@
 'use strict'
 
+import PropTypes from 'prop-types'
 import React from 'react'
-import primitiveWidgets from './widgets/primitiveWidgets'
-import multiWidgets from './widgets/multiWidgets'
-import flowWidget from './widgets/flowWidget'
-import fakeWidgets from './widgets/fakeWidgets'
-import {BasicWidgetMixin} from './widgets/mixins'
-import Component from './components/Component'
+import { DateInputWidget, IntegerInputWidget, FloatInputWidget, UrlInputWidget, SlugInputWidget, BooleanInputWidget, MultiLineTextInputWidget, SingleLineTextInputWidget } from './widgets/primitiveWidgets'
+import { CheckboxesInputWidget, SelectInputWidget } from './widgets/multiWidgets'
+import { FlowWidget } from './widgets/flowWidget'
+import { LineWidget, SpacingWidget, InfoWidget, HeadingWidget } from './widgets/fakeWidgets'
+import { widgetPropTypes } from './widgets/mixins'
 import ToggleGroup from './components/ToggleGroup'
 import i18n from './i18n'
 
 const widgetComponents = {
-  'singleline-text': primitiveWidgets.SingleLineTextInputWidget,
-  'multiline-text': primitiveWidgets.MultiLineTextInputWidget,
-  'datepicker': primitiveWidgets.DateInputWidget,
-  'integer': primitiveWidgets.IntegerInputWidget,
-  'float': primitiveWidgets.FloatInputWidget,
-  'checkbox': primitiveWidgets.BooleanInputWidget,
-  'url': primitiveWidgets.UrlInputWidget,
-  'slug': primitiveWidgets.SlugInputWidget,
-  'flow': flowWidget.FlowWidget,
-  'checkboxes': multiWidgets.CheckboxesInputWidget,
-  'select': multiWidgets.SelectInputWidget,
-  'f-line': fakeWidgets.LineWidget,
-  'f-spacing': fakeWidgets.SpacingWidget,
-  'f-info': fakeWidgets.InfoWidget,
-  'f-heading': fakeWidgets.HeadingWidget
+  'singleline-text': SingleLineTextInputWidget,
+  'multiline-text': MultiLineTextInputWidget,
+  datepicker: DateInputWidget,
+  integer: IntegerInputWidget,
+  float: FloatInputWidget,
+  checkbox: BooleanInputWidget,
+  url: UrlInputWidget,
+  slug: SlugInputWidget,
+  flow: FlowWidget,
+  checkboxes: CheckboxesInputWidget,
+  select: SelectInputWidget,
+  'f-line': LineWidget,
+  'f-spacing': SpacingWidget,
+  'f-info': InfoWidget,
+  'f-heading': HeadingWidget
 }
 
-const FallbackWidget = React.createClass({
-  mixins: [BasicWidgetMixin],
-  render () {
-    return (
-      <div>
-        <em>
-          Widget "{this.props.type.widget}" not implemented
-          (used by type "{this.props.type.name}")
-        </em>
-      </div>
-    )
-  }
-})
+function FallbackWidget (props) {
+  return (
+    <div>
+      <em>
+        Widget "{props.type.widget}" not implemented
+        (used by type "{props.type.name}")
+      </em>
+    </div>
+  )
+}
+FallbackWidget.propTypes = widgetPropTypes
 
-class FieldBox extends Component {
+class FieldBox extends React.PureComponent {
   render () {
-    const {field, value, onChange, placeholder, disabled} = this.props
+    const { field, value, placeholder, disabled } = this.props
+    const onChange = this.props.onChange ? this.props.onChange : (value) => this.props.setFieldValue(field, value)
     const className = 'col-md-' + getFieldColumns(field) + ' field-box'
     let innerClassName = 'field'
     let inner
@@ -68,13 +67,15 @@ class FieldBox extends Component {
       inner = (
         <dl className={innerClassName}>
           {!field.hide_label ? <dt>{i18n.trans(field.label_i18n)}</dt> : null}
-          <dd>{description}<Widget
-            value={value}
-            onChange={onChange}
-            type={field.type}
-            placeholder={placeholder}
-            disabled={disabled}
-          /></dd>
+          <dd>{description}
+            <Widget
+              value={value}
+              onChange={onChange}
+              type={field.type}
+              placeholder={placeholder}
+              disabled={disabled}
+            />
+          </dd>
         </dl>
       )
     }
@@ -88,10 +89,10 @@ class FieldBox extends Component {
 }
 
 FieldBox.propTypes = {
-  value: React.PropTypes.any,
-  onChange: React.PropTypes.func,
-  field: React.PropTypes.any,
-  placeholder: React.PropTypes.any
+  value: PropTypes.any,
+  onChange: PropTypes.func,
+  field: PropTypes.any,
+  placeholder: PropTypes.any
 }
 
 const getWidgetComponent = (type) => {
@@ -172,10 +173,15 @@ const renderFieldRows = (fields, isIllegalField, renderFunc) => {
   return [
     rv.normal,
     rv.system.length > 1
-      ? <ToggleGroup
-        key='sys'
-        groupTitle={i18n.trans('SYSTEM_FIELDS')}
-        defaultVisibility={false}>{rv.system}</ToggleGroup> : null
+      ? (
+        <ToggleGroup
+          key='sys'
+          groupTitle={i18n.trans('SYSTEM_FIELDS')}
+          defaultVisibility={false}
+        >
+          {rv.system}
+        </ToggleGroup>
+      ) : null
   ]
 }
 
@@ -185,6 +191,5 @@ export default {
   getFieldRows: getFieldRows,
   renderFieldRows: renderFieldRows,
   getFieldColumns: getFieldColumns,
-  FallbackWidget: FallbackWidget,
   FieldBox: FieldBox
 }

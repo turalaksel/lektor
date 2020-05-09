@@ -4,8 +4,8 @@ import json
 import time
 import itertools
 import warnings
-import pkg_resources
 import click
+import pkg_resources
 
 from .i18n import get_default_lang, is_valid_language
 from .utils import secure_url
@@ -48,6 +48,22 @@ def buildflag(cli):
         '--build-flag', 'build_flags', multiple=True,
         help='Deprecated. Use --extra-flag instead.',
         callback=buildflag_deprecated)(cli)
+
+
+class AliasedGroup(click.Group):
+
+    # pylint: disable=inconsistent-return-statements
+    def get_command(self, ctx, cmd_name):
+        rv = click.Group.get_command(self, ctx, cmd_name)
+        if rv is not None:
+            return rv
+        matches = [x for x in self.list_commands(ctx)
+                   if x.startswith(cmd_name)]
+        if not matches:
+            return None
+        elif len(matches) == 1:
+            return click.Group.get_command(self, ctx, matches[0])
+        ctx.fail('Too many matches: %s' % ', '.join(sorted(matches)))
 
 
 class Context(object):
@@ -100,19 +116,23 @@ class Context(object):
             return rv
         return self.get_project().get_output_path()
 
-    def get_env(self):
+    def get_env(self, extra_flags=None):
         if self._env is not None:
             return self._env
         from lektor.environment import Environment
-        env = Environment(self.get_project(), load_plugins=False)
+        env = Environment(self.get_project(), load_plugins=False,
+                          extra_flags=extra_flags)
         self._env = env
         return env
 
-    def load_plugins(self, reinstall=False):
+    def load_plugins(self, reinstall=False, extra_flags=None):
         from .packages import load_packages
-        from .pluginsystem import initialize_plugins
-        load_packages(self.get_env(), reinstall=reinstall)
-        initialize_plugins(self.get_env())
+        load_packages(self.get_env(extra_flags=extra_flags),
+                      reinstall=reinstall)
+
+        if not reinstall:
+            from .pluginsystem import initialize_plugins
+            initialize_plugins(self.get_env())
 
 
 pass_context = click.make_pass_decorator(Context, ensure=True)
@@ -124,7 +144,7 @@ def validate_language(ctx, param, value):
     return value
 
 
-@click.group()
+@click.group(cls=AliasedGroup)
 @click.option('--project', type=click.Path(),
               help='The path to the lektor project to work with.')
 @click.option('--language', default=None, callback=validate_language,
@@ -195,7 +215,7 @@ def build_cmd(ctx, output_path, watch, prune, verbosity,
     if output_path is None:
         output_path = ctx.get_default_output_path()
 
-    ctx.load_plugins()
+    ctx.load_plugins(extra_flags=extra_flags)
 
     env = ctx.get_env()
 
@@ -237,8 +257,9 @@ def build_cmd(ctx, output_path, watch, prune, verbosity,
 @click.option('-v', '--verbose', 'verbosity', count=True,
               help='Increases the verbosity of the logging.')
 @click.confirmation_option(help='Confirms the cleaning.')
+@extraflag
 @pass_context
-def clean_cmd(ctx, output_path, verbosity):
+def clean_cmd(ctx, output_path, verbosity, extra_flags):
     """Cleans the entire build folder.
 
     If not build folder is provided, the default build folder of the project
@@ -250,7 +271,7 @@ def clean_cmd(ctx, output_path, verbosity):
     if output_path is None:
         output_path = ctx.get_default_output_path()
 
-    ctx.load_plugins()
+    ctx.load_plugins(extra_flags=extra_flags)
     env = ctx.get_env()
 
     reporter = CliReporter(env, verbosity=verbosity)
@@ -296,7 +317,7 @@ def deploy_cmd(ctx, server, output_path, extra_flags, **credentials):
     if output_path is None:
         output_path = ctx.get_default_output_path()
 
-    ctx.load_plugins()
+    ctx.load_plugins(extra_flags=extra_flags)
     env = ctx.get_env()
     config = env.load_config()
 
@@ -361,7 +382,7 @@ def server_cmd(ctx, host, port, output_path, prune, verbosity,
     extra_flags = tuple(itertools.chain(extra_flags or (), build_flags or ()))
     if output_path is None:
         output_path = ctx.get_default_output_path()
-    ctx.load_plugins()
+    ctx.load_plugins(extra_flags=extra_flags)
     click.echo(' * Project path: %s' % ctx.get_project().project_path)
     click.echo(' * Output path: %s' % output_path)
     run_server((host, port), env=ctx.get_env(), output_path=output_path,
@@ -600,4 +621,16 @@ from .devcli import cli as devcli  # pylint: disable=wrong-import-position
 cli.add_command(devcli, 'dev')
 
 
-main = cli
+def main(as_module=False):
+    args = sys.argv[1:]
+    name = None
+
+    if as_module:
+        name = 'python -m lektor'
+        sys.argv = ['-m', 'lektor'] + args
+
+    cli.main(args=args, prog_name=name)
+
+
+if __name__ == '__main__':
+    main(as_module=True)

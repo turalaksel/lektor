@@ -1,11 +1,11 @@
 'use strict'
 
 import React from 'react'
-import RecordComponent from '../components/RecordEditComponent'
-import utils from '../utils'
+import RecordComponent from '../components/RecordComponent'
+import { apiRequest, loadData, getParentFsPath } from '../utils'
 import i18n from '../i18n'
 import hub from '../hub'
-import {AttachmentsChangedEvent} from '../events'
+import { AttachmentsChangedEvent } from '../events'
 import makeRichPromise from '../richPromise'
 
 class DeletePage extends RecordComponent {
@@ -23,13 +23,14 @@ class DeletePage extends RecordComponent {
     this.syncDialog()
   }
 
-  componentWillReceiveProps (nextProps) {
-    super.componentWillReceiveProps(nextProps)
-    this.syncDialog()
+  componentDidUpdate (nextProps) {
+    if (nextProps.match.params.path !== this.props.match.params.path) {
+      this.syncDialog()
+    }
   }
 
   syncDialog () {
-    utils.loadData('/recordinfo', {path: this.getRecordPath()}, null, makeRichPromise)
+    loadData('/recordinfo', { path: this.getRecordPath() }, null, makeRichPromise)
       .then((resp) => {
         this.setState({
           recordInfo: resp,
@@ -40,7 +41,7 @@ class DeletePage extends RecordComponent {
 
   deleteRecord (event) {
     const path = this.getRecordPath()
-    const parent = utils.getParentFsPath(path)
+    const parent = getParentFsPath(path)
     let targetPath
     if (parent === null) {
       targetPath = 'root'
@@ -48,12 +49,15 @@ class DeletePage extends RecordComponent {
       targetPath = this.getUrlRecordPathWithAlt(parent)
     }
 
-    utils.apiRequest('/deleterecord', {data: {
-      path: path,
-      alt: this.getRecordAlt(),
-      delete_master: this.state.deleteMasterRecord ? '1' : '0'
-    },
-      method: 'POST'}, makeRichPromise)
+    apiRequest('/deleterecord', {
+      data: {
+        path: path,
+        alt: this.getRecordAlt(),
+        delete_master: this.state.deleteMasterRecord ? '1' : '0'
+      },
+      // eslint-disable-next-line indent
+      method: 'POST'
+    }, makeRichPromise)
       .then((resp) => {
         if (this.state.recordInfo.is_attachment) {
           hub.emit(new AttachmentsChangedEvent({
@@ -61,13 +65,13 @@ class DeletePage extends RecordComponent {
             attachmentsRemoved: [this.state.recordInfo.id]
           }))
         }
-        this.transitionToAdminPage('.edit', {path: targetPath})
+        this.transitionToAdminPage('.edit', { path: targetPath })
       })
   }
 
   cancelDelete (event) {
     const urlPath = this.getUrlRecordPathWithAlt()
-    this.transitionToAdminPage('.edit', {path: urlPath})
+    this.transitionToAdminPage('.edit', { path: urlPath })
   }
 
   onDeleteAllAltsChange (event) {
@@ -157,16 +161,24 @@ class DeletePage extends RecordComponent {
       elements.push(
         <ul key='delete-all-alts'>
           <li>
-            <input type='radio' id='delete-all-alts' value='1' name='delete-master-record' checked={
-              this.state.deleteMasterRecord} onChange={this.onDeleteAllAltsChange.bind(this)} />{' '}
+            <input
+              type='radio' id='delete-all-alts' value='1' name='delete-master-record' checked={
+                this.state.deleteMasterRecord
+              } onChange={this.onDeleteAllAltsChange.bind(this)}
+            />{' '}
             <label htmlFor='delete-all-alts'>{i18n.trans(
-              ri.is_attachment ? 'DELETE_ALL_ATTACHMENT_ALTS' : 'DELETE_ALL_PAGE_ALTS')}</label>
+              ri.is_attachment ? 'DELETE_ALL_ATTACHMENT_ALTS' : 'DELETE_ALL_PAGE_ALTS')}
+            </label>
           </li>
           <li>
-            <input type='radio' id='delete-only-this-alt' value='0' name='delete-master-record' checked={
-              !this.state.deleteMasterRecord} onChange={this.onDeleteAllAltsChange.bind(this)} />{' '}
+            <input
+              type='radio' id='delete-only-this-alt' value='0' name='delete-master-record' checked={
+                !this.state.deleteMasterRecord
+              } onChange={this.onDeleteAllAltsChange.bind(this)}
+            />{' '}
             <label htmlFor='delete-only-this-alt'>{i18n.trans(
-              ri.is_attachment ? 'DELETE_ONLY_PRIMARY_ATTACHMENT_ALT' : 'DELETE_ONLY_PRIMARY_PAGE_ALT')}</label>
+              ri.is_attachment ? 'DELETE_ONLY_PRIMARY_ATTACHMENT_ALT' : 'DELETE_ONLY_PRIMARY_PAGE_ALT')}
+            </label>
           </li>
         </ul>
       )
@@ -181,29 +193,35 @@ class DeletePage extends RecordComponent {
       <div>
         <h2>{i18n.trans('DELETE_RECORD').replace('%s', label)}</h2>
         {elements}
-        <div style={{display: this.state.deleteMasterRecord && alts.length > 0 ? 'block' : 'none'}}>
+        <div style={{ display: this.state.deleteMasterRecord && alts.length > 0 ? 'block' : 'none' }}>
           <h4>{i18n.trans('ALTS_TO_BE_DELETED')}</h4>
           <ul>
             {alts}
           </ul>
         </div>
-        <div style={{display: this.state.deleteMasterRecord && children.length > 0 ? 'block' : 'none'}}>
+        <div style={{ display: this.state.deleteMasterRecord && children.length > 0 ? 'block' : 'none' }}>
           <h4>{i18n.trans('CHILD_PAGES_TO_BE_DELETED')}</h4>
           <ul>
             {children}
           </ul>
         </div>
-        <div style={{display: this.state.deleteMasterRecord && attachments.length > 0 ? 'block' : 'none'}}>
+        <div style={{ display: this.state.deleteMasterRecord && attachments.length > 0 ? 'block' : 'none' }}>
           <h4>{i18n.trans('ATTACHMENTS_TO_BE_DELETED')}</h4>
           <ul>
             {attachments}
           </ul>
         </div>
         <div className='actions'>
-          <button className='btn btn-primary'
-            onClick={this.deleteRecord.bind(this)}>{i18n.trans('YES_DELETE')}</button>
-          <button className='btn btn-default'
-            onClick={this.cancelDelete.bind(this)}>{i18n.trans('NO_CANCEL')}</button>
+          <button
+            className='btn btn-primary'
+            onClick={this.deleteRecord.bind(this)}
+          >{i18n.trans('YES_DELETE')}
+          </button>
+          <button
+            className='btn btn-default'
+            onClick={this.cancelDelete.bind(this)}
+          >{i18n.trans('NO_CANCEL')}
+          </button>
         </div>
       </div>
     )

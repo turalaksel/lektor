@@ -3,16 +3,16 @@
 /* eslint-env browser */
 
 import React from 'react'
-import utils from '../utils'
+import { apiRequest, loadData, getPlatform } from '../utils'
 import i18n from '../i18n'
 import hub from '../hub'
-import {AttachmentsChangedEvent} from '../events'
+import { AttachmentsChangedEvent } from '../events'
 import RecordComponent from './RecordComponent'
 import Link from '../components/Link'
 import makeRichPromise from '../richPromise'
 
 const getBrowseButtonTitle = () => {
-  const platform = utils.getPlatform()
+  const platform = getPlatform()
   if (platform === 'mac') {
     return i18n.trans('BROWSE_FS_MAC')
   } else if (platform === 'windows') {
@@ -89,7 +89,7 @@ class Sidebar extends RecordComponent {
 
   componentDidUpdate (prevProps, prevState) {
     super.componentDidUpdate(prevProps, prevState)
-    if (prevProps.params.path !== this.props.params.path) {
+    if (prevProps.match.params.path !== this.props.match.params.path) {
       this._updateRecordInfo()
     }
   }
@@ -115,7 +115,7 @@ class Sidebar extends RecordComponent {
     this.setState({
       lastRecordRequest: path
     }, () => {
-      utils.loadData('/recordinfo', {path: path}, null, makeRichPromise)
+      loadData('/recordinfo', { path: path }, null, makeRichPromise)
         .then((resp) => {
           // we're already fetching something else.
           if (path !== this.state.lastRecordRequest) {
@@ -145,11 +145,14 @@ class Sidebar extends RecordComponent {
 
   fsOpen (event) {
     event.preventDefault()
-    utils.apiRequest('/browsefs', {data: {
-      path: this.getRecordPath(),
-      alt: this.getRecordAlt()
-    },
-      method: 'POST'}, makeRichPromise)
+    apiRequest('/browsefs', {
+      data: {
+        path: this.getRecordPath(),
+        alt: this.getRecordAlt()
+      },
+      // eslint-disable-next-line indent
+      method: 'POST'
+    }, makeRichPromise)
       .then((resp) => {
         if (!resp.okay) {
           alert(i18n.trans('ERROR_CANNOT_BROWSE_FS'))
@@ -166,22 +169,28 @@ class Sidebar extends RecordComponent {
       <li key='edit'>
         <Link to={`${urlPath}/edit`}>
           {this.state.isAttachment
-           ? i18n.trans('EDIT_METADATA')
-           : i18n.trans('EDIT')}
+            ? i18n.trans('EDIT_METADATA')
+            : i18n.trans('EDIT')}
         </Link>
       </li>
     )
 
     if (this.state.canBeDeleted) {
       links.push(
-        <li key='delete'><Link to={`${urlPath}/delete`}>
-          {i18n.trans('DELETE')}</Link></li>
+        <li key='delete'>
+          <Link to={`${urlPath}/delete`}>
+            {i18n.trans('DELETE')}
+          </Link>
+        </li>
       )
     }
 
     links.push(
-      <li key='preview'><Link to={`${urlPath}/preview`}>
-        {i18n.trans('PREVIEW')}</Link></li>
+      <li key='preview'>
+        <Link to={`${urlPath}/preview`}>
+          {i18n.trans('PREVIEW')}
+        </Link>
+      </li>
     )
 
     if (this.state.recordExists) {
@@ -196,15 +205,21 @@ class Sidebar extends RecordComponent {
 
     if (this.state.canHaveChildren) {
       links.push(
-        <li key='add-child'><Link to={`${urlPath}/add-child`}>
-          {i18n.trans('ADD_CHILD_PAGE')}</Link></li>
+        <li key='add-child'>
+          <Link to={`${urlPath}/add-child`}>
+            {i18n.trans('ADD_CHILD_PAGE')}
+          </Link>
+        </li>
       )
     }
 
     if (this.state.canHaveAttachments) {
       links.push(
-        <li key='add-attachment'><Link to={`${urlPath}/upload`}>
-          {i18n.trans('ADD_ATTACHMENT')}</Link></li>
+        <li key='add-attachment'>
+          <Link to={`${urlPath}/upload`}>
+            {i18n.trans('ADD_ATTACHMENT')}
+          </Link>
+        </li>
       )
     }
 
@@ -261,14 +276,14 @@ class Sidebar extends RecordComponent {
   }
 
   renderChildPagination () {
-    let pages = Math.ceil(this.state.recordChildren.length / CHILDREN_PER_PAGE)
+    const pages = Math.ceil(this.state.recordChildren.length / CHILDREN_PER_PAGE)
     if (pages <= 1) {
       return null
     }
-    let page = this.state.childrenPage
-    let goToPage = (diff, event) => {
+    const page = this.state.childrenPage
+    const goToPage = (diff, event) => {
       event.preventDefault()
-      let newPage = page + diff
+      const newPage = page + diff
       this.childPosCache.rememberPosition(this.getRecordPath(), newPage)
       this.setState({
         childrenPage: newPage
@@ -289,7 +304,7 @@ class Sidebar extends RecordComponent {
   }
 
   renderChildActions () {
-    const target = this.isRecordPreviewActive() ? 'preview' : 'edit'
+    const target = this.props.match.params.page === 'preview' ? 'preview' : 'edit'
 
     const children = this.state.recordChildren.slice(
       (this.state.childrenPage - 1) * CHILDREN_PER_PAGE,
@@ -300,7 +315,8 @@ class Sidebar extends RecordComponent {
       return (
         <li key={child.id}>
           <Link to={`${urlPath}/${target}`}>
-            {i18n.trans(child.label_i18n)}</Link>
+            {i18n.trans(child.label_i18n)}
+          </Link>
         </li>
       )
     })
@@ -330,7 +346,8 @@ class Sidebar extends RecordComponent {
       return (
         <li key={atch.id}>
           <Link to={`${urlPath}/edit`}>
-            {atch.id} ({atch.type})</Link>
+            {atch.id} ({atch.type})
+          </Link>
         </li>
       )
     })

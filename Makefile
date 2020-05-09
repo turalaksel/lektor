@@ -1,9 +1,13 @@
 all: build-js
 
-build-js:
+build-js: lektor/admin/node_modules
 	@echo "---> building static files"
-	@cd lektor/admin; npm install .
 	@cd lektor/admin; npm run webpack
+
+lektor/admin/node_modules: lektor/admin/package-lock.json
+	@echo "---> installing npm dependencies"
+	@cd lektor/admin; npm install
+	@touch -m lektor/admin/node_modules
 
 pex:
 	virtualenv pex-build-cache
@@ -19,7 +23,8 @@ pex:
 
 test-python:
 	@echo "---> running python tests"
-	py.test . --tb=short -v --cov=lektor
+	pylint lektor
+	pytest . --tb=long -vv --cov=lektor
 
 coverage-python: test-python
 	coverage xml

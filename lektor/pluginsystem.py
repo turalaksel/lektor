@@ -1,9 +1,10 @@
 import os
 import sys
+import warnings
 from weakref import ref as weakref
-
-import pkg_resources
 from inifile import IniFile
+import pkg_resources
+
 from lektor._compat import iteritems, itervalues
 from lektor.context import get_ctx
 
@@ -51,6 +52,7 @@ class Plugin(object):
         path = os.path.abspath(os.path.dirname(mod.__file__))
         if not path.startswith(self.env.project.get_package_cache_path()):
             return path
+        return None
 
     @property
     def import_name(self):
@@ -129,8 +131,9 @@ class PluginController(object):
     the environment.
     """
 
-    def __init__(self, env):
+    def __init__(self, env, extra_flags=None):
         self._env = weakref(env)
+        self.extra_flags = extra_flags
 
     @property
     def env(self):
@@ -152,10 +155,23 @@ class PluginController(object):
         return itervalues(self.env.plugins)
 
     def emit(self, event, **kwargs):
+        from lektor.builder import process_extra_flags
         rv = {}
+        kwargs['extra_flags'] = process_extra_flags(self.extra_flags)
         funcname = 'on_' + event.replace('-', '_')
         for plugin in self.iter_plugins():
             handler = getattr(plugin, funcname, None)
             if handler is not None:
-                rv[plugin.id] = handler(**kwargs)
+                try:
+                    rv[plugin.id] = handler(**kwargs)
+                except TypeError:
+                    old_style_kwargs = kwargs.copy()
+                    old_style_kwargs.pop("extra_flags")
+                    rv[plugin.id] = handler(**old_style_kwargs)
+                    warnings.warn(
+                        'The plugin "{}" function "{}" does not accept extra_flags. '
+                        "It should be updated to accept `**extra` so that it will "
+                        "not break if new parameters are passed to it by newer "
+                        "versions of Lektor.".format(plugin.id, funcname), DeprecationWarning
+                    )
         return rv

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from itertools import chain
 from collections import deque, namedtuple
 
+import click
 from werkzeug.posixemulation import rename
 
 from lektor._compat import PY2, iteritems, text_type
@@ -141,6 +142,7 @@ class BuildState(object):
     def get_file_info(self, filename):
         if filename:
             return self.path_cache.get_file_info(filename)
+        return None
 
     def to_source_filename(self, filename):
         return self.path_cache.to_source_filename(filename)
@@ -549,7 +551,7 @@ class VirtualSourceInfo(object):
 
         if self.path != other.path:
             raise ValueError("trying to compare mismatched virtual paths: "
-                             "%r.unchanged(%r)", self, other)
+                             "%r.unchanged(%r)" % (self, other))
 
         return (self.mtime, self.checksum) == (other.mtime, other.checksum)
 
@@ -963,6 +965,15 @@ class Builder(object):
 
         try:
             os.makedirs(self.meta_path)
+            if os.listdir(self.destination_path) != ['.lektor']:
+                if not click.confirm(click.style(
+                        "The build dir %s hasn't been used before, and other "
+                        "files or folders already exist there. If you prune "
+                        "(which normally follows the build step), "
+                        "they will be deleted. Proceed with building?"
+                        % self.destination_path, fg='yellow')):
+                    os.rmdir(self.meta_path)
+                    raise click.Abort()
         except OSError:
             pass
 
@@ -989,7 +1000,7 @@ class Builder(object):
         if PY2:
             # This code block solve lektor/lektor#243 issue
             # `os.walk` return :class:`str` type string. But :class:`str` mean
-            # diffrent type between Python 2 and 3.
+            # different type between Python 2 and 3.
             # (:class:`str` on PY2 is equivalent to :class:`bytes` on PY3)
             # :mod:`sqlite` can not consume multibyte input string because
             # it expect :class:`unicode` on PY2, not bytes.
@@ -1034,7 +1045,8 @@ class Builder(object):
                                   reversed(builtin_build_programs)):
             if isinstance(source, cls):
                 return builder(source, build_state)
-        raise RuntimeError('I do not know how to build %r' % source)
+        # TODO: re-enable pylint when https://github.com/PyCQA/pylint/issues/1782 is fixed.
+        raise RuntimeError('I do not know how to build %r' % source) # pylint: disable=inconsistent-return-statements
 
     def build_artifact(self, artifact, build_func):
         """Various parts of the system once they have an artifact and a
@@ -1057,6 +1069,7 @@ class Builder(object):
                         ctx.record_dependency(project_file)
                     build_func(artifact)
                 return ctx
+        return None
 
     def update_source_info(self, prog, build_state):
         """Updates a single source info based on a program.  This is done
@@ -1139,13 +1152,19 @@ class Builder(object):
         """Fast way to update all source infos without having to build
         everything.
         """
-        with reporter.build('source info update', self):
-            with self.new_build_state() as build_state:
-                to_build = self.get_initial_build_queue()
-                while to_build:
-                    source = to_build.popleft()
-                    with reporter.process_source(source):
-                        prog = self.get_build_program(source, build_state)
-                        self.update_source_info(prog, build_state)
-                    self.extend_build_queue(to_build, prog)
-            build_state.prune_source_infos()
+        # We keep a dummy connection here that does not do anything which
+        # helps us with the WAL handling.  See #144
+        con = self.connect_to_database()
+        try:
+            with reporter.build('source info update', self):
+                with self.new_build_state() as build_state:
+                    to_build = self.get_initial_build_queue()
+                    while to_build:
+                        source = to_build.popleft()
+                        with reporter.process_source(source):
+                            prog = self.get_build_program(source, build_state)
+                            self.update_source_info(prog, build_state)
+                        self.extend_build_queue(to_build, prog)
+                build_state.prune_source_infos()
+        finally:
+            con.close()

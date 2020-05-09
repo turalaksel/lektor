@@ -3,11 +3,79 @@ Changelog
 
 These are all the changes in Lektor since the first public release.
 
-3.1.0.dev1
+3.2.0
 -----
 
-Release date TBD.
+Release date TBD
 
+- Replaced the slugify backend to handle unicode more effectively. This may break some slugs built from unicode.
+- Several modernization and performance improvements to the admin UI
+- Improved speed of source info updates.
+- Set colorspace to sRGB for thumbnails.
+- Now stripping profiles and comments from thumbnails.
+- Added support for deleting and excluding files for the rsync deployment publisher.
+- Improved speed of flow rendering in the admin UI.
+- Bugfix to correctly calculate relative urls from slugs that contain dots.
+- Bugfix to allow negative integers in integer fields in the admin UI.
+- Improved image-heavy build speeds by reducing the amount of data extracted from EXIFs.
+- Added the ability to collapse flow elements in the admin UI.
+- Now `extra_flags` is passed to all plugin events.
+- Extra flags can now be passed to the `clean` and `dev shell` CLI commands.
+- Bugfix where `lektor plugins reinstall` triggered `on_setup_env` instead of just reinstalling plugins.
+- Added the ability to generate video thumbnails with ffmpeg.
+- Added `mode` and `upscale` thumbnail arguments, changing the preferred method to crop to using `mode`. `mode` can be `crop`, `fit`, or `stretch`. `upscale=False` can now prevent upscaling.
+- Added a new CLI command `lektor dev new-theme`.
+- Made admin use full UTF-8 version of RobotoSlab. Fixes missing glyphs for some languages
+- Bumped minimum Jinja2 version to 2.11
+- Bumped filetype dependency to 1.0.7 because of API changes
+- Relative urls are now as short as possible.
+- Changed default slug creation to use slugify. This should mean greater language support, but this may produce slightly different results than before for some users
+- Automatically include setup.cfg configured for universal wheels when creating plugins
+
+3.1.3
+-----
+
+Release date 26th of January, 2019
+
+- Release with universal build.
+
+3.1.2
+-----
+
+Release date 7th of September 2018
+
+- Fix pagination and virtual pathing for alts
+- Fixing deply from local server in Python 3
+- Now passing server_info to publisher from local server, providing better
+  support for plugin provided publishers.
+- Added a more full-featured example project.
+- Adding Jinja2 `do` extension.
+- Better new-plugin command.
+- More tests.
+- Added the ability to sort child pages in admin according to models.
+- Better image handling and info detection for JPGs and SVGs
+- Lektor can now be ran with `python -m lektor`
+- New plugins now come with a more full featured setup.py
+
+3.1.1
+-----
+
+Release date 18th of April 2018
+
+- Better Image dimension detection.
+- Fix backwards compatibility with thumbnail generation.
+- Adding safety check when runnning new build in non-empty dir since that could delete data.
+- Adding command aliases.
+
+3.1.0
+-----
+
+Release date 29th of January 2018.
+
+- Adding ability to use Lektor Themes.
+- Adding Markdown event hook between instantiating the Renderer and creating the Markdown Processor
+- Improving tests for GitHub deployment.
+- Added the ability to use IPython in the lektor dev shell if it's available.
 - Added ability to publish from different filesystems.
 - Adding new option to turn disable editing fields on alternatives.
 - Added automated testing for Windows.

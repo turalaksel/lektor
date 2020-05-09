@@ -24,7 +24,7 @@ def get_asset(pad, filename, parent=None):
 
 
 class Asset(SourceObject):
-    # source specific overrides.  the source_filename to none removes
+    # Source specific overrides.  The source_filename to none removes
     # the inherited descriptor.
     source_classification = 'asset'
     source_filename = None
@@ -79,9 +79,11 @@ class Asset(SourceObject):
     def resolve_url_path(self, url_path):
         if not url_path:
             return self
+        # pylint: disable=assignment-from-none
         child = self.get_child(url_path[0], from_url=True)
         if child is not None:
             return child.resolve_url_path(url_path[1:])
+        return None
 
     def __repr__(self):
         return '<%s %r>' % (
@@ -110,14 +112,15 @@ class Directory(Asset):
         if asset is not None or not from_url:
             return asset
 
-        # This this point it means we did not find a child yet, but we
-        # came from an URL.  We can try to chop of product suffixes to
+        # At this point it means we did not find a child yet, but we
+        # came from an URL.  We can try to chop off product suffixes to
         # find the original source asset.  For instance a file called
         # foo.less.css will be reduced to foo.less.
         prod_suffix = '.' + '.'.join(name.rsplit('.', 2)[1:])
         ext = self.pad.db.env.special_file_suffixes.get(prod_suffix)
         if ext is not None:
             return get_asset(self.pad, name[:-len(prod_suffix)] + ext, parent=self)
+        return None
 
     def resolve_url_path(self, url_path):
         # Resolve "/path/" to "/path/index.html", as production servers do.

@@ -1,5 +1,6 @@
 'use strict'
 
+import PropTypes from 'prop-types'
 import React from 'react'
 import RecordComponent from '../components/RecordComponent'
 import SlideDialog from '../components/SlideDialog'
@@ -16,14 +17,18 @@ class ErrorDialog extends RecordComponent {
       <SlideDialog
         hasCloseButton
         closeOnEscape
-        title={i18n.trans('ERROR')}>
+        title={i18n.trans('ERROR')}
+      >
         <p>
           {i18n.trans('ERROR_OCURRED')}{': '}
           {i18n.trans('ERROR_' + this.props.error.code)}
         </p>
         <div className='actions'>
-          <button type='submit' className='btn btn-primary'
-            onClick={this.onClose.bind(this)}>{i18n.trans('CLOSE')}</button>
+          <button
+            type='submit' className='btn btn-primary'
+            onClick={this.onClose.bind(this)}
+          >{i18n.trans('CLOSE')}
+          </button>
         </div>
       </SlideDialog>
     )
@@ -31,7 +36,7 @@ class ErrorDialog extends RecordComponent {
 }
 
 ErrorDialog.propTypes = {
-  error: React.PropTypes.object
+  error: PropTypes.object
 }
 
 export default ErrorDialog

@@ -1,9 +1,13 @@
+# pylint: disable=too-many-lines
 import os
 import errno
+import functools
 import hashlib
 import operator
 import posixpath
+import warnings
 
+from datetime import timedelta
 from itertools import islice, chain
 
 from jinja2 import Undefined, is_undefined
@@ -17,17 +21,21 @@ from lektor._compat import string_types, text_type, integer_types, \
      iteritems, range_type
 from lektor import metaformat
 from lektor.utils import sort_normalize_string, cleanup_path, \
-     untrusted_to_os_path, fs_enc
+     untrusted_to_os_path, fs_enc, locate_executable
 from lektor.sourceobj import SourceObject, VirtualSourceObject
 from lektor.context import get_ctx, Context
 from lektor.datamodel import load_datamodels, load_flowblocks
-from lektor.imagetools import make_thumbnail, read_exif, get_image_info
+from lektor.imagetools import (
+    ThumbnailMode, make_image_thumbnail,
+    read_exif, get_image_info,
+)
 from lektor.assets import Directory
 from lektor.editor import make_editor_session
 from lektor.environment import PRIMARY_ALT
 from lektor.databags import Databags
 from lektor.filecontents import FileContents
 from lektor.utils import make_relative_url, split_virtual_path
+from lektor.videotools import get_video_info, make_video_thumbnail
 
 # pylint: disable=no-member
 
@@ -556,6 +564,7 @@ class Page(Record):
 
     @property
     def url_path(self):
+        # pylint: disable=no-value-for-parameter
         rv = Record.url_path.__get__(self).rstrip('/')
         last_part = rv.rsplit('/')[-1]
         if '.' not in last_part:
@@ -612,6 +621,7 @@ class Page(Record):
             rv = node.resolve_url_path(url_path[idx + 1:])
             if rv is not None:
                 return rv
+        return None
 
     @cached_property
     def parent(self):
@@ -622,6 +632,7 @@ class Page(Record):
             return self.pad.get(parent_path,
                                 persist=self.pad.cache.is_persistent(self),
                                 alt=self.alt)
+        return None
 
     @property
     def children(self):
@@ -777,18 +788,151 @@ class Image(Attachment):
             return rv
         return Undefined('The format of the image could not be determined.')
 
-    def thumbnail(self, width, height=None, crop=False, quality=None):
+    def thumbnail(self,
+                  width=None, height=None, crop=None, mode=None,
+                  upscale=None, quality=None):
         """Utility to create thumbnails."""
-        width = int(width)
+
+        # `crop` exists to preserve backward-compatibility, and will be removed.
+        if crop is not None and mode is not None:
+            raise ValueError('Arguments `crop` and `mode` are mutually exclusive.')
+
+        if crop is not None:
+            warnings.warn(
+                'The `crop` argument is deprecated. Use `mode="crop"` instead.'
+            )
+            mode = "crop"
+
+        if mode is None:
+            mode = ThumbnailMode.DEFAULT
+        else:
+            mode = ThumbnailMode.from_label(mode)
+
+        if width is not None:
+            width = int(width)
         if height is not None:
             height = int(height)
-        return make_thumbnail(_require_ctx(self),
+
+        return make_image_thumbnail(_require_ctx(self),
             self.attachment_filename, self.url_path,
-            width=width, height=height, crop=crop, quality=quality)
+            width=width, height=height, mode=mode,
+            upscale=upscale, quality=quality)
+
+
+def require_ffmpeg(f):
+    """Decorator to help with error messages for ffmpeg template functions."""
+    # If both ffmpeg and ffprobe executables are available we don't need to
+    # override the function
+    if locate_executable('ffmpeg') and locate_executable('ffprobe'):
+        return f
+
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        return Undefined('Unable to locate ffmpeg or ffprobe executable. Is '
+                         'it installed?')
+
+    return wrapper
+
+
+class Video(Attachment):
+    """Specific class for video attachments."""
+    def __init__(self, pad, data, page_num=None):
+        Attachment.__init__(self, pad, data, page_num)
+        self._video_info = None
+
+    def _get_video_info(self):
+        if self._video_info is None:
+            try:
+                self._video_info = get_video_info(self.attachment_filename)
+            except RuntimeError:
+                # A falsy value ensures we don't retry this video again
+                self._video_info = False
+        return self._video_info
+
+    @property
+    @require_ffmpeg
+    def width(self):
+        """Returns the width of the video if possible to determine."""
+        rv = self._get_video_info()
+        if rv:
+            return rv['width']
+        return Undefined('The width of the video could not be determined.')
+
+    @property
+    @require_ffmpeg
+    def height(self):
+        """Returns the height of the video if possible to determine."""
+        rv = self._get_video_info()
+        if rv:
+            return rv['height']
+        return Undefined('The height of the video could not be determined.')
+
+    @property
+    @require_ffmpeg
+    def duration(self):
+        """Returns the duration of the video if possible to determine."""
+        rv = self._get_video_info()
+        if rv:
+            return rv['duration']
+        return Undefined('The duration of the video could not be determined.')
+
+    @require_ffmpeg
+    def frame(self, seek=None):
+        """Returns a VideoFrame object that is thumbnailable like an Image."""
+        rv = self._get_video_info()
+        if not rv:
+            return Undefined('Unable to get video properties.')
+
+        if seek is None:
+            seek = rv["duration"] / 2
+        return VideoFrame(self, seek)
+
+
+class VideoFrame(object):
+    """Representation of a specific frame in a VideoAttachment.
+
+    This is currently only useful for thumbnails, but in the future it might
+    work like an ImageAttachment.
+    """
+
+    def __init__(self, video, seek):
+        self.video = video
+
+        if not isinstance(seek, timedelta):
+            seek = timedelta(seconds=seek)
+
+        if seek < timedelta(0):
+            raise ValueError("Seek distance must not be negative")
+        if video.duration and seek > video.duration:
+            raise ValueError(
+                "Seek distance must not be outside the video duration")
+
+        self.seek = seek
+
+    def __str__(self):
+        raise NotImplementedError('It is currently not possible to use video '
+                                  'frames directly, use .thumbnail().')
+    __unicode__ = __str__
+
+    @require_ffmpeg
+    def thumbnail(self, width=None, height=None, mode=None, upscale=None,
+                  quality=None):
+        """Utility to create thumbnails."""
+        if mode is None:
+            mode = ThumbnailMode.DEFAULT
+        else:
+            mode = ThumbnailMode.from_label(mode)
+
+        video = self.video
+        return make_video_thumbnail(
+            _require_ctx(video), video.attachment_filename, video.url_path,
+            seek=self.seek, width=width, height=height, mode=mode,
+            upscale=upscale, quality=quality)
 
 
 attachment_classes = {
     'image': Image,
+    'video': Video,
 }
 
 
@@ -905,6 +1049,8 @@ class Query(object):
             # attachments and/nor children.  I have no idea which
             # value of order_by to use.  We could punt and return
             # child_config.order_by, but for now, just return None.
+            return None
+        return None
 
     def include_hidden(self, value):
         """Controls if hidden records should be included which will not
@@ -1160,14 +1306,14 @@ class Database(object):
                 # Special case: we are loading an attachment but the meta
                 # data file does not exist.  In that case we still want to
                 # record that we're loading an attachment.
-                elif is_attachment:
+                if is_attachment:
                     rv_type = True
 
             if '_source_alt' not in rv:
                 rv['_source_alt'] = source_alt
 
         if rv_type is None:
-            return
+            return None
 
         rv['_path'] = path
         rv['_id'] = posixpath.basename(path)
@@ -1471,7 +1617,12 @@ class Pad(object):
                 return rv
 
         if include_assets:
-            return self.asset_root.resolve_url_path(pieces)
+            for asset_root in [self.asset_root] + self.theme_asset_roots:
+                rv = asset_root.resolve_url_path(pieces)
+                if rv is not None:
+                    break
+            return rv
+        return None
 
     def get_root(self, alt=PRIMARY_ALT):
         """The root page of the database."""
@@ -1485,6 +1636,15 @@ class Pad(object):
         return Directory(self, name='',
                          path=os.path.join(self.db.env.root_path, 'assets'))
 
+    @property
+    def theme_asset_roots(self):
+        """The root of the asset tree of each theme."""
+        asset_roots = []
+        for theme_path in self.db.env.theme_paths:
+            asset_roots.append(Directory(self, name='',
+                                          path=os.path.join(theme_path, 'assets')))
+        return asset_roots
+
     def get_all_roots(self):
         """Returns all the roots for building."""
         rv = []
@@ -1497,6 +1657,7 @@ class Pad(object):
             rv = [self.root]
 
         rv.append(self.asset_root)
+        rv.extend(self.theme_asset_roots)
         return rv
 
     def get_virtual(self, record, virtual_path):
@@ -1507,7 +1668,7 @@ class Pad(object):
 
         if pieces[0].isdigit():
             if len(pieces) == 1:
-                return self.get(record['_path'], page_num=int(pieces[0]))
+                return self.get(record['_path'], alt=record.alt, page_num=int(pieces[0]))
             return None
 
         resolver = self.env.virtual_sources.get(pieces[0])
@@ -1556,7 +1717,7 @@ class Pad(object):
         raw_data = self.db.load_raw_data(path, alt=alt)
         if raw_data is None:
             self.cache.remember_as_missing(path, alt, virtual_path)
-            return
+            return None
 
         rv = self.instance_from_data(raw_data, page_num=page_num)
 
@@ -1590,12 +1751,15 @@ class Pad(object):
     def get_asset(self, path):
         """Loads an asset by path."""
         clean_path = cleanup_path(path).strip('/')
-        node = self.asset_root
-        for piece in clean_path.split('/'):
-            node = node.get_child(piece)
-            if node is None:
-                break
-        return node
+        nodes = [self.asset_root] + self.theme_asset_roots
+        for node in nodes:
+            for piece in clean_path.split('/'):
+                node = node.get_child(piece)
+                if node is None:
+                    break
+            if node is not None:
+                return node
+        return None
 
     def instance_from_data(self, raw_data, datamodel=None, page_num=None):
         """This creates an instance from the given raw data."""
@@ -1654,6 +1818,7 @@ class TreeItem(object):
         """Returns a child within this item."""
         if self.exists:
             return self.tree.get(posixpath.join(self.path, path))
+        return None
 
     def iter_children(self, include_attachments=True, include_pages=True):
         """Iterates over all children."""

@@ -1,90 +1,79 @@
-var webpack = require('webpack')
-var path = require('path')
-var ExtractTextPlugin = require('extract-text-webpack-plugin')
+const webpack = require('webpack')
+const path = require('path')
+const MiniCssExtractPlugin = require('mini-css-extract-plugin')
 
 module.exports = {
+  mode: 'development',
   entry: {
-    'app': './js/main.jsx',
-    'styles': './less/main.less',
-    'vendor': [
+    app: './js/main.jsx',
+    styles: './less/main.less',
+    vendor: [
       'jquery',
-      'native-promise-only',
       'querystring',
       'bootstrap',
       'react',
       'react-dom',
-      'react-addons-update',
-      'react-router'
+      'react-router-dom'
     ]
   },
   output: {
     path: path.join(__dirname, '/gen'),
     filename: '[name].js'
   },
-  devtool: '#cheap-module-eval-source-map',
+  devtool: 'source-map',
+  optimization: {
+    splitChunks: {
+      chunks: 'all',
+      name: 'vendor'
+    }
+  },
   resolve: {
-    modulesDirectories: ['../node_modules'],
-    extensions: ['', '.jsx', '.js', '.json']
+    modules: [
+      '../node_modules'
+    ],
+    extensions: ['.jsx', '.js', '.json']
   },
   module: {
-    loaders: [
+    rules: [
       {
         test: /\.jsx$/,
         exclude: /node_modules/,
-        loader: 'babel',
-        query: {
-          presets: ['react', 'es2015'],
-          plugins: ['transform-object-rest-spread'],
+        loader: 'babel-loader',
+        options: {
+          presets: ['@babel/preset-react', '@babel/preset-env'],
           cacheDirectory: true
         }
       },
       {
         test: /\.less$/,
-        loader: ExtractTextPlugin.extract('style-loader', 'css-loader!less-loader')
+        use: [
+          MiniCssExtractPlugin.loader,
+          'css-loader?sourceMap',
+          'less-loader?sourceMap'
+        ]
       },
       {
         test: /\.css$/,
-        loader: ExtractTextPlugin.extract('style-loader', 'css-loader')
+        use: [
+          MiniCssExtractPlugin.loader,
+          'css-loader?sourceMap'
+        ]
       },
       {
-        test: /\.json$/,
-        loader: 'json-loader'
-      },
-      {
-        test: /\.woff(\?v=\d+\.\d+\.\d+)?$/,
-        loader: 'url?limit=10000&mimetype=application/font-woff'
-      },
-      {
-        test: /\.woff2(\?v=\d+\.\d+\.\d+)?$/,
-        loader: 'url?limit=10000&mimetype=application/font-woff'
-      },
-      {
-        test: /\.ttf(\?v=\d+\.\d+\.\d+)?$/,
-        loader: 'url?limit=10000&mimetype=application/octet-stream'
-      },
-      {
-        test: /\.eot(\?v=\d+\.\d+\.\d+)?$/,
-        loader: 'file'
-      },
-      {
-        test: /\.svg(\?v=\d+\.\d+\.\d+)?$/,
-        loader: 'url?limit=10000&mimetype=image/svg+xml'
+        test: /\.(ttf|eot|svg|woff2?)(\?v=\d+\.\d+\.\d+)?$/,
+        loader: 'file-loader'
       }
     ]
   },
   plugins: [
-    new webpack.optimize.CommonsChunkPlugin('vendor', 'vendor.js'),
-    new webpack.optimize.DedupePlugin(),
+    new MiniCssExtractPlugin({
+      filename: '[name].css',
+      chunkFilename: '[id].css'
+    }),
     new webpack.ProvidePlugin({
       $: 'jquery',
       jQuery: 'jquery'
-    }),
-    new ExtractTextPlugin('styles.css', {
-      allChunks: true
     })
   ],
-  externals: {},
-  resolveLoader: {
-    root: path.join(__dirname, '..', 'node_modules')
-  }
+  externals: {}
 }

@@ -3,13 +3,14 @@ import math
 import os
 
 from inifile import IniFile
+from slugify import slugify
 
 from lektor import types
 from lektor._compat import iteritems, itervalues
 from lektor.environment import Expression, FormatExpression, PRIMARY_ALT
 from lektor.i18n import get_i18n_block, generate_i18n_kvs
 from lektor.pagination import Pagination
-from lektor.utils import bool_from_string, slugify
+from lektor.utils import bool_from_string
 
 
 class ChildConfig(object):
@@ -92,26 +93,26 @@ class PaginationConfig(object):
     def match_pagination(self, record, url_path):
         """Matches the pagination from the URL path."""
         if not self.enabled:
-            return
+            return None
         suffixes = self.url_suffix.strip('/').split('/')
         if url_path[:len(suffixes)] != suffixes:
-            return
-
+            return None
         try:
             page_num = int(url_path[len(suffixes)])
         except (ValueError, IndexError):
-            return
+            return None
 
         # It's important we do not allow "1" here as the first page is always
         # on the root.  Changing this would mean the URLs are incorrectly
         # generated if someone manually went to /page/1/.
         if page_num == 1 or len(url_path) != len(suffixes) + 1:
-            return
+            return None
 
         # Page needs to have at least a single child.
         rv = self.get_record_for_page(record, page_num)
         if rv.pagination.items.first() is not None:
             return rv
+        return None
 
     def get_pagination_controller(self, record):
         if not self.enabled:
@@ -520,6 +521,7 @@ def datamodel_from_data(env, model_data, parent=None):
             for item in path:
                 node = getattr(node, item)
             return node
+        return None
 
     fields = fields_from_data(env, model_data['fields'],
                               parent and parent.fields or None)
@@ -592,11 +594,15 @@ def iter_inis(path):
 
 def load_datamodels(env):
     """Loads the datamodels for a specific environment."""
-    path = os.path.join(env.root_path, 'models')
+    # Models will override previous loaded models with the same name
+    # So models paths are loaded in reverse order
+    paths = list(reversed(env.theme_paths)) + [env.root_path]
+    paths = [os.path.join(p, 'models') for p in paths]
     data = {}
 
-    for model_id, inifile in iter_inis(path):
-        data[model_id] = datamodel_data_from_ini(model_id, inifile)
+    for path in paths:
+        for model_id, inifile in iter_inis(path):
+            data[model_id] = datamodel_data_from_ini(model_id, inifile)
 
     rv = {}
 
@@ -606,6 +612,7 @@ def load_datamodels(env):
             return model
         if model_id in data:
             return create_model(model_id)
+        return None
 
     def create_model(model_id):
         model_data = data.get(model_id)
@@ -630,12 +637,16 @@ def load_datamodels(env):
 
 def load_flowblocks(env):
     """Loads all the flow blocks for a specific environment."""
-    path = os.path.join(env.root_path, 'flowblocks')
+    # Flowblocks will override previous loaded flowblocks with the same name
+    # So paths are loaded in reverse order
+    paths = list(reversed(env.theme_paths)) + [env.root_path]
+    paths = [os.path.join(p, 'flowblocks') for p in paths]
     rv = {}
 
-    for flowblock_id, inifile in iter_inis(path):
-        rv[flowblock_id] = flowblock_from_data(env,
-            flowblock_data_from_ini(flowblock_id, inifile))
+    for path in paths:
+        for flowblock_id, inifile in iter_inis(path):
+            rv[flowblock_id] = flowblock_from_data(env,
+                flowblock_data_from_ini(flowblock_id, inifile))
 
     return rv
 

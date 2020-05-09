@@ -58,7 +58,7 @@ class BasicWatcher(object):
 class Watcher(BasicWatcher):
 
     def __init__(self, env, output_path=None):
-        BasicWatcher.__init__(self, paths=[env.root_path])
+        BasicWatcher.__init__(self, paths=[env.root_path] + env.theme_paths)
         self.env = env
         self.output_path = output_path
         self.cache_dir = os.path.abspath(get_cache_dir())
@@ -70,7 +70,7 @@ class Watcher(BasicWatcher):
             return False
         if path.startswith(self.cache_dir):
             return False
-        if self.output_path is not None and path.startswith(self.output_path):
+        if self.output_path is not None and path.startswith(os.path.abspath(self.output_path)):
             return False
         return True
 

@@ -1,20 +1,49 @@
 # -*- coding: utf-8 -*-
+import decimal
 import os
-import imghdr
+import re
 import struct
 import posixpath
+import warnings
 from datetime import datetime
+from enum import IntEnum
 from xml.etree import ElementTree as etree
+
 import exifread
+import filetype
 
 from lektor.utils import get_dependent_url, portable_popen, locate_executable
 from lektor.reporter import reporter
-from lektor.uilink import BUNDLE_BIN_PATH
 from lektor._compat import iteritems, text_type, PY2
 
 
 # yay shitty library
 datetime.strptime('', '')
+
+
+class ThumbnailMode(IntEnum):
+    FIT, CROP, STRETCH = range(1, 4)
+
+    @property
+    def label(self):
+        """The mode's label as used in templates."""
+        # our constants are uppercase with underscores,
+        # while template uses lowercase and dashes.
+        return self.name.lower().replace('_', '-') # pylint: disable=no-member
+
+    @classmethod
+    def from_label(cls, label):
+        """
+        Looks up the thumbnail mode by its textual representation.
+        """
+        name = label.upper().replace('-', '_')
+        try:
+            return cls.__members__[name] # pylint: disable=no-member
+        except KeyError:
+            raise ValueError("Invalid thumbnail mode '%s'." % label)
+
+# set the default. do it outside the class to not confuse things
+ThumbnailMode.DEFAULT = ThumbnailMode.FIT
 
 
 def _convert_gps(coords, hem):
@@ -29,6 +58,25 @@ def _combine_make(make, model):
     if make and model.startswith(make):
         return make
     return u' '.join([make, model]).strip()
+
+
+_parse_svg_units_re = re.compile(
+    r'(?P<value>[+-]?(?:\d+)(?:\.\d+)?)\s*(?P<unit>\D+)?',
+    flags=re.IGNORECASE
+)
+
+
+def _parse_svg_units_px(length):
+    match = _parse_svg_units_re.match(length)
+    if not match:
+        return None
+    match = match.groupdict()
+    if match['unit'] and match['unit'] != 'px':
+        return None
+    try:
+        return float(match['value'])
+    except ValueError:
+        return None
 
 
 class EXIFInfo(object):
@@ -131,18 +179,21 @@ class EXIFInfo(object):
         val = self._get_float('EXIF ShutterSpeedValue')
         if val is not None:
             return '1/%d' % round(1 / (2 ** -val))  # pylint: disable=invalid-unary-operand-type
+        return None
 
     @property
     def focal_length(self):
         val = self._get_float('EXIF FocalLength')
         if val is not None:
             return u'%smm' % val
+        return None
 
     @property
     def focal_length_35mm(self):
         val = self._get_float('EXIF FocalLengthIn35mmFilm')
         if val is not None:
             return u'%dmm' % val
+        return None
 
     @property
     def flash_info(self):
@@ -159,6 +210,7 @@ class EXIFInfo(object):
         val = self._get_int('EXIF ISOSpeedRatings')
         if val is not None:
             return val
+        return None
 
     @property
     def created_at(self):
@@ -204,6 +256,7 @@ class EXIFInfo(object):
             if ref == 1:
                 val *= -1
             return val
+        return None
 
     @property
     def location(self):
@@ -211,6 +264,7 @@ class EXIFInfo(object):
         long = self.longitude
         if lat is not None and long is not None:
             return (lat, long)
+        return None
 
     @property
     def documentname(self):
@@ -231,12 +285,13 @@ class EXIFInfo(object):
         """
         return self._get_int('Image Orientation') in {5, 6, 7, 8}
 
-def get_suffix(width, height, crop=False, quality=None):
-    suffix = str(width)
+
+def get_suffix(width, height, mode, quality=None):
+    suffix = '' if width is None else str(width)
     if height is not None:
         suffix += 'x%s' % height
-    if crop:
-        suffix += '_crop'
+    if mode != ThumbnailMode.DEFAULT:
+        suffix += '_%s' % mode.label
     if quality is not None:
         suffix += '_q%s' % quality
     return suffix
@@ -245,14 +300,25 @@ def get_suffix(width, height, crop=False, quality=None):
 def get_svg_info(fp):
     _, svg = next(etree.iterparse(fp, ['start']), (None, None))
     fp.seek(0)
+    width, height = None, None
     if svg is not None and svg.tag == '{http://www.w3.org/2000/svg}svg':
-        try:
-            width = int(svg.attrib['width'])
-            height = int(svg.attrib['height'])
-            return 'svg', width, height
-        except (ValueError, KeyError):
-            pass
-    return 'unknown', None, None
+        width = _parse_svg_units_px(svg.attrib.get('width', ''))
+        height = _parse_svg_units_px(svg.attrib.get('height', ''))
+    return 'svg', width, height
+
+
+# see http://www.w3.org/Graphics/JPEG/itu-t81.pdf
+# Table B.1 – Marker code assignments (page 32/36)
+_JPEG_SOF_MARKERS = (
+    # non-differential, Hufmann-coding
+    0xc0, 0xc1, 0xc2, 0xc3,
+    # differential, Hufmann-coding
+    0xc5, 0xc6, 0xc7,
+    # non-differential, arithmetic-coding
+    0xc9, 0xca, 0xcb,
+    # differential, arithmetic-coding
+    0xcd, 0xce, 0xcf,
+)
 
 
 def get_image_info(fp):
@@ -262,10 +328,12 @@ def get_image_info(fp):
     if len(head) < 24:
         return 'unknown', None, None
 
-    if head.strip().startswith(b'<?xml '):
+    magic_bytes = b'<?xml', b'<svg'
+    if any(map(head.strip().startswith, magic_bytes)):
         return get_svg_info(fp)
 
-    fmt = imghdr.what(None, head)
+    _type = filetype.image_match(bytearray(head))
+    fmt = _type.mime.split("/")[1] if _type else None
 
     width = None
     height = None
@@ -276,22 +344,61 @@ def get_image_info(fp):
     elif fmt == 'gif':
         width, height = struct.unpack('<HH', head[6:10])
     elif fmt == 'jpeg':
-        try:
-            fp.seek(0)
-            size = 2
-            ftype = 0
-            while not 0xc0 <= ftype <= 0xcf:
-                fp.seek(size, 1)
+        # specification available under
+        # http://www.w3.org/Graphics/JPEG/itu-t81.pdf
+        # Annex B (page 31/35)
+
+        # we are looking for a SOF marker ("start of frame").
+        # skip over the "start of image" marker
+        # (filetype detection took care of that).
+        fp.seek(2)
+
+        while True:
+            byte = fp.read(1)
+
+            # "All markers are assigned two-byte codes: an X’FF’ byte
+            # followed by a byte which is not equal to 0 or X’FF’."
+            if not byte or ord(byte) != 0xff:
+                raise Exception("Malformed JPEG image.")
+
+            # "Any marker may optionally be preceded by any number
+            # of fill bytes, which are bytes assigned code X’FF’."
+            while ord(byte) == 0xff:
                 byte = fp.read(1)
-                while ord(byte) == 0xff:
-                    byte = fp.read(1)
-                ftype = ord(byte)
-                size = struct.unpack('>H', fp.read(2))[0] - 2
-            # We are at a SOFn block
-            fp.seek(1, 1)  # Skip `precision' byte.
+
+            if ord(byte) not in _JPEG_SOF_MARKERS:
+                # header length parameter takes 2 bytes for all markers
+                length = struct.unpack('>H', fp.read(2))[0]
+                fp.seek(length - 2, 1)
+                continue
+
+            # else...
+            # see Figure B.3 – Frame header syntax (page 35/39) and
+            # Table B.2 – Frame header parameter sizes and values
+            # (page 36/40)
+            fp.seek(3, 1) # skip header length and precision parameters
             height, width = struct.unpack('>HH', fp.read(4))
-        except Exception:
-            return 'jpeg', None, None
+
+            if height == 0:
+                # "Value 0 indicates that the number of lines shall be
+                # defined by the DNL marker [...]"
+                #
+                # DNL is not supported by most applications,
+                # so we won't support it either.
+                raise Exception("JPEG with DNL not supported.")
+
+            break
+
+        # if the file is rotated, we want, for all intents and purposes,
+        # to return the dimensions swapped. (all client apps will display
+        # the image rotated, and any template computations are likely to want
+        # to make decisions based on the "visual", not the "real" dimensions.
+        # thumbnail code also depends on this behaviour.)
+        fp.seek(0)
+        if is_rotated(fp):
+            width, height = height, width
+    else:
+        fmt = None
 
     return fmt, width, height
 
@@ -300,6 +407,12 @@ def read_exif(fp):
     """Reads exif data from a file pointer of an image and returns it."""
     exif = exifread.process_file(fp)
     return EXIFInfo(exif)
+
+
+def is_rotated(fp):
+    """Fast version of read_exif(fp).is_rotated, using an exif header subset."""
+    exif = exifread.process_file(fp, stop_tag='Orientation', details=False)
+    return EXIFInfo(exif).is_rotated
 
 
 def find_imagemagick(im=None):
@@ -311,14 +424,6 @@ def find_imagemagick(im=None):
     # On windows, imagemagick was renamed to magick, because
     # convert is system utility for fs manipulation.
     imagemagick_exe = 'convert' if os.name != 'nt' else 'magick'
-
-    # If we have a shipped imagemagick, then we used this one.
-    if BUNDLE_BIN_PATH is not None:
-        executable = os.path.join(BUNDLE_BIN_PATH, imagemagick_exe)
-        if os.name == 'nt':
-            executable += '.exe'
-        if os.path.isfile(executable):
-            return executable
 
     rv = locate_executable(imagemagick_exe)
     if rv is not None:
@@ -345,84 +450,150 @@ def get_quality(source_filename):
     return 85
 
 
-def computed_height(source_image, format, width, actual_width, actual_height):
-    # If the file is a JPEG file and the EXIF header shows that the image
-    # is rotated, imagemagick will auto-orient the file. That is, a 400x200
-    # file where the target width is 100px will *not* be converted to a
-    # 100x50 image, but to 100x200.
-    if format == 'jpeg':
-        with open(source_image, 'rb') as image_file:
-            exif = read_exif(image_file)
-        if exif.is_rotated:
-            actual_width, actual_height = actual_height, actual_width
-    return int(float(actual_height) * (float(width) / float(actual_width)))
+def compute_dimensions(width, height, source_width, source_height):
+    """computes the bounding dimensions"""
+    computed_width, computed_height = width, height
 
+    width, height, source_width, source_height = (
+        None if v is None else float(v)
+        for v in (width, height, source_width, source_height)
+    )
 
-def process_image(ctx, source_image, dst_filename, width, height=None,
-                  crop=False, quality=None):
+    source_ratio = source_width / source_height
+
+    def _round(x):
+        # make sure things get top-rounded, to be consistent with imagemagick
+        return int(
+            decimal.Decimal(x).to_integral(decimal.ROUND_HALF_UP)
+        )
+
+    if width is None or (height is not None and
+                         width / height > source_ratio):
+        computed_width = _round(height * source_ratio)
+    else:
+        computed_height = _round(width / source_ratio)
+
+    return computed_width, computed_height
+
+def process_image(ctx, source_image, dst_filename,
+                  width=None, height=None, mode=ThumbnailMode.DEFAULT,
+                  quality=None):
     """Build image from source image, optionally compressing and resizing.
 
     "source_image" is the absolute path of the source in the content directory,
     "dst_filename" is the absolute path of the target in the output directory.
     """
+    if width is None and height is None:
+        raise ValueError("Must specify at least one of width or height.")
+
     im = find_imagemagick(
         ctx.build_state.config['IMAGEMAGICK_EXECUTABLE'])
 
     if quality is None:
         quality = get_quality(source_image)
 
-    resize_key = str(width)
+    resize_key = ''
+    if width is not None:
+        resize_key += str(width)
     if height is not None:
         resize_key += 'x' + str(height)
 
+    if mode == ThumbnailMode.STRETCH:
+        resize_key += '!'
+
     cmdline = [im, source_image, '-auto-orient']
-    if crop:
+    if mode == ThumbnailMode.CROP:
         cmdline += ['-resize', resize_key + '^',
                     '-gravity', 'Center',
                     '-extent', resize_key]
     else:
         cmdline += ['-resize', resize_key]
 
+    cmdline += ['-strip', "-colorspace", "sRGB"]
     cmdline += ['-quality', str(quality), dst_filename]
 
     reporter.report_debug_info('imagemagick cmd line', cmdline)
     portable_popen(cmdline).wait()
 
 
-def make_thumbnail(ctx, source_image, source_url_path, width, height=None,
-                   crop=False, quality=None):
+def make_image_thumbnail(ctx, source_image, source_url_path,
+                         width=None, height=None, mode=ThumbnailMode.DEFAULT,
+                         upscale=None, quality=None):
     """Helper method that can create thumbnails from within the build process
     of an artifact.
     """
+    if width is None and height is None:
+        raise ValueError("Must specify at least one of width or height.")
+
+    # this part needs to be removed once backward-compatibility period passes
+    if upscale is None and mode == ThumbnailMode.FIT:
+        warnings.warn(
+            'Your images are currently scaled up when the thumbnail requested '
+            'is larger than the source. This default will change in the future. '
+            'If you want to preserve the current behaviour, use `upscale=True`.'
+        )
+        upscale = True
+
+    if upscale is None:
+        upscale = {
+            ThumbnailMode.FIT: False,
+            ThumbnailMode.CROP: True,
+            ThumbnailMode.STRETCH: True,
+        }[mode]
+
+    # temporarily fallback to "fit" in case of erroneous arguments
+    # to preserve backward-compatibility.
+    # this needs to change to an exception in the future.
+    if mode != ThumbnailMode.FIT and (width is None or height is None):
+        warnings.warn(
+            '"%s" mode requires both `width` and `height` to be defined. '
+            'Falling back to "fit" mode.`' % mode.label
+        )
+        mode = ThumbnailMode.FIT
+
     with open(source_image, 'rb') as f:
         format, source_width, source_height = get_image_info(f)
-        if format == 'unknown':
-            raise RuntimeError('Cannot process unknown images')
 
-    suffix = get_suffix(width, height, crop=crop, quality=quality)
-    dst_url_path = get_dependent_url(source_url_path, suffix,
-                                     ext=get_thumbnail_ext(source_image))
-    report_height = height
-
-    if height is None:
-        # we can only crop if a height is specified
-        crop = False
-        report_height = computed_height(source_image, format, width,
-                                        source_width, source_height)
+    if format is None:
+        raise RuntimeError('Cannot process unknown images')
 
     # If we are dealing with an actual svg image, we do not actually
-    # resize anything, we just return it.  This is not ideal but it's
+    # resize anything, we just return it. This is not ideal but it's
     # better than outright failing.
     if format == 'svg':
         return Thumbnail(source_url_path, width, height)
+
+    if not upscale:
+        def _original():
+            return Thumbnail(source_url_path, source_width, source_height)
+
+        if height is None:
+            if source_width < width:
+                return _original()
+        elif width is None:
+            if source_height < height:
+                return _original()
+        else:
+            if source_width < width and source_height < height:
+                return _original()
+
+    suffix = get_suffix(width, height, mode, quality=quality)
+    dst_url_path = get_dependent_url(source_url_path, suffix,
+                                     ext=get_thumbnail_ext(source_image))
+
+    if mode == ThumbnailMode.FIT:
+        computed_width, computed_height = compute_dimensions(
+            width, height, source_width, source_height)
+    else:
+        computed_width, computed_height = width, height
 
     @ctx.sub_artifact(artifact_name=dst_url_path, sources=[source_image])
     def build_thumbnail_artifact(artifact):
         artifact.ensure_dir()
         process_image(ctx, source_image, artifact.dst_filename,
-                      width, height, crop=crop, quality=quality)
+                      width, height, mode, quality=quality)
 
-    return Thumbnail(dst_url_path, width, report_height)
+    return Thumbnail(dst_url_path, computed_width, computed_height)
 
 
 class Thumbnail(object):

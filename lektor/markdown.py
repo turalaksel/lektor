@@ -3,10 +3,10 @@ from weakref import ref as weakref
 
 import mistune
 from markupsafe import Markup, escape
+from werkzeug.urls import url_parse
 
 from lektor._compat import PY2
 from lektor.context import get_ctx
-from werkzeug.urls import url_parse
 
 
 _markdown_cache = threading.local()
@@ -59,6 +59,7 @@ def make_markdown(env):
     cfg = MarkdownConfig()
     env.plugin_controller.emit('markdown-config', config=cfg)
     renderer = cfg.make_renderer()
+    env.plugin_controller.emit('markdown-lexer-config', config=cfg, renderer=renderer)
     return mistune.Markdown(renderer, **cfg.options)
 
 

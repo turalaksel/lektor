@@ -73,7 +73,6 @@ class BuildProgram(object):
         the build state so that the UI can quickly find files without
         having to scan the file system.
         """
-        pass
 
     def build(self):
         """Invokes the build program."""
@@ -156,6 +155,7 @@ class PageBuildProgram(BuildProgram):
                     type='page',
                     title_i18n=self.source.get_record_label_i18n()
                 )
+        return None
 
     def produce_artifacts(self):
         pagination_enabled = self.source.datamodel.pagination_config.enabled

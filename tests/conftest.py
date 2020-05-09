@@ -1,6 +1,5 @@
 import os
 import shutil
-import subprocess
 import textwrap
 import pytest
 
@@ -13,7 +12,7 @@ def project():
 
 
 @pytest.fixture(scope='function')
-def scratch_project(tmpdir):
+def scratch_project_data(tmpdir):
     base = tmpdir.mkdir("scratch-proj")
     lektorfile_text = textwrap.dedent(u"""
         [project]
@@ -30,7 +29,7 @@ def scratch_project(tmpdir):
         ---
         title: Index
         ---
-        body: Hello World!
+        body: *Hello World!*
     """)
     base.join("content", "contents.lr").write_text(content_text, "utf8", ensure=True)
     template_text = textwrap.dedent(u"""
@@ -49,7 +48,13 @@ def scratch_project(tmpdir):
     """)
     base.join("models", "page.ini").write_text(model_text, "utf8", ensure=True)
 
+    return base
+
+
+@pytest.fixture(scope='function')
+def scratch_project(scratch_project_data):
     from lektor.project import Project
+    base = scratch_project_data
     return Project.from_path(str(base))
 
 
@@ -139,11 +144,13 @@ def reporter(request, env):
 @pytest.fixture(scope='function')
 def os_user(monkeypatch):
     if os.name == 'nt':
-        import getpass
+        import getpass  # pylint: disable=unused-import
         monkeypatch.setattr('getpass.getuser', lambda: 'Lektor Test')
         return "lektortest"
 
-    import pwd
+    # we disable pylint, because there is no such
+    # modules on windows & it's false positive
+    import pwd  # pylint: disable=import-error
     struct = pwd.struct_passwd((
         'lektortest',  # pw_name
         'lektorpass',  # pw_passwd
@@ -156,21 +163,6 @@ def os_user(monkeypatch):
     monkeypatch.setattr("pwd.getpwuid", lambda id: struct)
     monkeypatch.setenv("USER", "lektortest")
     return "lektortest"
-
-
-@pytest.fixture(scope='function')
-def git_user_email(request):
-    old_email = subprocess.Popen(['git', 'config', 'user.email'],
-                                 stdout=subprocess.PIPE,
-                                 stderr=subprocess.PIPE).communicate()[0].strip()
-
-    def cleanup():
-        subprocess.check_call(['git', 'config', 'user.email', old_email])
-    request.addfinalizer(cleanup)
-
-    email = "lektortest@example.com"
-    subprocess.check_call(['git', 'config', 'user.email', email])
-    return email
 
 
 @pytest.fixture(scope='function')

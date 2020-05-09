@@ -13,14 +13,14 @@ from inifile import IniFile
 from werkzeug.urls import url_parse
 from werkzeug.utils import cached_property
 
-from lektor._compat import iteritems, string_types
+from lektor._compat import iteritems, string_types, PY2
 from lektor.context import (config_proxy, get_asset_url, get_ctx, get_locale,
     site_proxy, url_to)
 from lektor.i18n import get_i18n_block
 from lektor.markdown import Markdown
 from lektor.pluginsystem import PluginController
 from lektor.utils import (bool_from_string, format_lat_long, secure_url,
-    tojson_filter)
+    tojson_filter, is_windows)
 
 
 # Special value that identifies a target to the primary alt
@@ -68,6 +68,7 @@ DEFAULT_CONFIG = {
         'url': None,
         'url_style': 'relative',
     },
+    'THEME_SETTINGS': {},
     'PACKAGES': {},
     'ALTERNATIVES': OrderedDict(),
     'PRIMARY_ALTERNATIVE': None,
@@ -94,7 +95,7 @@ def update_config_from_ini(config, inifile):
     set_simple(target='LESSC_EXECUTABLE',
                source_path='env.lessc_executable')
 
-    for section_name in ('ATTACHMENT_TYPES', 'PROJECT', 'PACKAGES'):
+    for section_name in ('ATTACHMENT_TYPES', 'PROJECT', 'PACKAGES', 'THEME_SETTINGS'):
         section_config = inifile.section_as_dict(section_name.lower())
         config[section_name].update(section_config)
 
@@ -215,7 +216,13 @@ class CustomJinjaEnvironment(jinja2.Environment):
         try:
             rv = jinja2.Environment._load_template(self, name, globals)
             if ctx is not None:
-                ctx.record_dependency(rv.filename)
+                filename = rv.filename
+                if PY2 and is_windows:
+                    try:
+                        filename = filename.decode('utf-8')
+                    except UnicodeDecodeError:
+                        pass
+                ctx.record_dependency(filename)
             return rv
         except jinja2.TemplateSyntaxError as e:
             if ctx is not None:
@@ -273,6 +280,7 @@ class Config(object):
                 choices.append(server_info)
         if len(choices) == 1:
             return choices[0]
+        return None
 
     def get_server(self, name, public=False):
         """Looks up a server info by name."""
@@ -372,6 +380,7 @@ class Config(object):
         url = self.values['PROJECT'].get('url')
         if url and url_parse(url).scheme:
             return url.rstrip('/') + '/'
+        return None
 
     @cached_property
     def base_path(self):
@@ -397,15 +406,33 @@ def lookup_from_bag(*args):
 
 class Environment(object):
 
-    def __init__(self, project, load_plugins=True):
+    def __init__(self, project, load_plugins=True, extra_flags=None):
         self.project = project
         self.root_path = os.path.abspath(project.tree)
 
+        self.theme_paths = [os.path.join(self.root_path, 'themes', theme)
+                            for theme in self.project.themes]
+
+        if not self.theme_paths:
+            # load the directories in the themes directory as the themes
+            try:
+                for fname in os.listdir(os.path.join(self.root_path, 'themes')):
+                    f = os.path.join(self.root_path, 'themes', fname)
+                    if os.path.isdir(f):
+                        self.theme_paths.append(f)
+            except OSError:
+                pass
+
+        template_paths = [os.path.join(path, 'templates')
+                          for path in [self.root_path] + self.theme_paths]
+
         self.jinja_env = CustomJinjaEnvironment(
             autoescape=self.select_jinja_autoescape,
-            extensions=['jinja2.ext.autoescape', 'jinja2.ext.with_'],
+            extensions=['jinja2.ext.autoescape',
+                        'jinja2.ext.with_',
+                        'jinja2.ext.do'],
             loader=jinja2.FileSystemLoader(
-                os.path.join(self.root_path, 'templates'))
+                template_paths)
         )
 
         from lektor.db import F, get_alts
@@ -448,7 +475,7 @@ class Environment(object):
         # The plugins that are loaded for this environment.  This is
         # modified by the plugin controller and registry methods on the
         # environment.
-        self.plugin_controller = PluginController(self)
+        self.plugin_controller = PluginController(self, extra_flags)
         self.plugins = {}
         self.plugin_ids_by_class = {}
         self.build_programs = []
@@ -555,6 +582,7 @@ class Environment(object):
             rv = resolver(obj, url_path)
             if rv is not None:
                 return rv
+        return None
 
     # -- methods for the plugin system
 
